@@ -7,8 +7,8 @@ export interface Row {
 }
 
 /**
- * A Client Component, so its props are serialized into the Flight payload. That is where the
- * duplication shows: server-only markup would appear once in the HTML either way.
+ * A Client Component. Next.js serializes its props into the Flight payload. The second copy of the
+ * shell appears there.
  */
 export const Rows = ({ rows }: { rows: Row[] }) => (
     <ul>

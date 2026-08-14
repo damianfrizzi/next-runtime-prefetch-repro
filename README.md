@@ -1,18 +1,20 @@
-# Runtime prefetch rides on every dynamic render, and `prefetch` cannot opt out
+# Runtime prefetch in every dynamic render
 
-Next.js 16.3.1 · `cacheComponents: true` · `partialPrefetching: true`
+Next.js 16.3.1, `cacheComponents: true`, `partialPrefetching: true`.
 
-## Shape
+This project shows two behaviours that do not agree with the documentation.
 
-`app/item/[id]/page.tsx` is a cached shell (`'use cache'`, `cacheLife('max')`) with one request-time
-hole handed in as a prop — the pass-through pattern from the `use cache` reference. The hole reads
-`searchParams`, so the route builds as `◐ Partial Prerender`.
+## The route
 
-The shell renders a Client Component with 200 rows. Each row carries the token `REPRO_MARKER`, so
-counting the token counts the copies of the shell. A correct response holds two: once as rendered
-markup, once in the inlined Flight payload.
+`app/item/[id]/page.tsx` is a cached shell. It uses `'use cache'` and `cacheLife('max')`. The page
+gives the shell one request-time child as a prop. The `use cache` reference calls this the
+pass-through pattern. The child reads `searchParams`, so the route builds as `◐ Partial Prerender`.
 
-## Run
+The shell renders a Client Component with 200 rows. Each row holds the token `REPRO_MARKER`. The
+count of that token gives the number of copies of the shell. A correct response holds two copies:
+the rendered markup, and the inlined Flight payload.
+
+## How to run
 
 ```bash
 bun install
@@ -23,68 +25,67 @@ bun install
 
 | # | Configuration | Bytes | Copies in Flight |
 | - | --- | ---: | ---: |
-| 1 | `partialPrefetching: true` + `prefetch = 'force-disabled'` | 54,251 | **2** |
+| 1 | `partialPrefetching: true` and `prefetch = 'force-disabled'` | 54,251 | **2** |
 | 2 | `partialPrefetching: true`, no `prefetch` export | 54,237 | **2** |
 | 3 | `partialPrefetching: false` | 30,466 | 1 |
 
-Rows 1 and 2 differ by the 14 bytes of the line itself. The segment config changes nothing else.
+Row 1 and row 2 differ by 14 bytes. Those bytes are the export line. The segment configuration
+changes nothing else.
 
-## 1. `prefetch = 'force-disabled'` does not override the app-level default
+## Behaviour 1: `prefetch = 'force-disabled'` does not override the application default
 
 `docs/app/api-reference/config/next-config-js/partialPrefetching` says:
 
 > A segment that exports an explicit `prefetch` value overrides the app-level default for that
 > route.
 
-It does not reach the runtime prefetch. The gate reads the global flag first and short-circuits:
+The value does not reach the runtime prefetch. The gate reads the global flag first, then stops:
 
 ```js
 // server/app-render/app-render.js:475 (Flight) and :2003 (HTML)
 if (Boolean(renderOpts.partialPrefetching) || await anySegmentHasPartialPrefetchingEnabled(tree)) {
 ```
 
-`anySegmentHasPartialPrefetchingEnabled` only ever returns `true` — it recognises `'partial'` and
-`'unstable_eager'` and has no way to express an opt-out. `spawnRuntimePrefetchWithFilledCaches` then
-prerenders the whole route without reading the segment config at all.
+`anySegmentHasPartialPrefetchingEnabled` returns `true` for `'partial'` and `'unstable_eager'`. It
+cannot express an opt-out. `spawnRuntimePrefetchWithFilledCaches` then prerenders the whole route.
+It does not read the segment configuration.
 
-So a route can opt **in** per segment, and cannot opt **out**. The only control is the app-level
-flag, which the adoption guide describes as the end state:
+A route can therefore opt in per segment. A route cannot opt out. The application flag is the only
+control. The adoption guide describes that flag as the end state:
 
 > Once every route in scope has `prefetch = 'partial'`, enable the global flag and remove the
 > per-route exports.
 
-## 2. The runtime prefetch is spawned per dynamic render, not per link
+## Behaviour 2: the runtime prefetch runs for each dynamic render
 
 `docs/app/guides/runtime-prefetching` says:
 
 > Runtime prefetching is opted into per link with `<Link prefetch={true}>`.
 
-and
+and:
 
 > Generating it costs a server invocation per prefetchable link, so it is opt-in per link.
 
-`measure.sh` sends a plain document request — no `RSC` header, no `Next-Router-Prefetch`, no `<Link>`
-anywhere in the flow. The second Flight copy is in the response anyway.
+`measure.sh` sends a plain document request. The request carries no `RSC` header and no
+`Next-Router-Prefetch` header. No `<Link>` is part of the flow. The response carries the second
+Flight copy.
 
 The source states the purpose: "so the client can cache runtime-prefetchable content during
-hydration". A client that never hydrates still pays for it. On a content site where crawlers are the
-majority of traffic, that is most of the requests.
+hydration". A client that does not hydrate pays the same cost. Crawlers do not hydrate.
 
-## Why this matters
+## Cost in a production application
 
-Measured on a production app — a film detail route with a cached shell and one streamed panel, the
-same shape as this reproduction:
+A production route uses the same shape: a cached shell and one streamed panel.
 
-| | `partialPrefetching: true` | `false` |
+| | `partialPrefetching: true` | `partialPrefetching: false` |
 | --- | ---: | ---: |
 | document | 452,894 B | 299,762 B |
-| on the wire, brotli | 45.7 KB | 38.7 KB |
+| wire, brotli | 45.7 KB | 38.7 KB |
 
-Brotli hides most of it on the wire because the two copies are identical. The client still parses
-and allocates both. On that route, 78% of requests carry a declared crawler user agent.
+The two copies are equal, so brotli compresses them well and the wire cost stays small. The client
+parses both copies. On that route, 78 % of the requests carry a declared crawler user agent.
 
-## What would fix it
+## A possible fix
 
-Let `prefetch = 'force-disabled'` (and `'auto'`) gate the spawn, so a route can opt out without
-turning the app-level flag off. A second useful control would be skipping the runtime prefetch on
-requests that are not navigations, since the embedded copy only pays off for a client that hydrates.
+Let `prefetch = 'force-disabled'` and `prefetch = 'auto'` gate the spawn. A route can then opt out,
+and the application flag can stay on.
