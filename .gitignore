@@ -1,0 +1,5 @@
+.next
+node_modules
+.server.log
+.response.html
+next-env.d.ts
