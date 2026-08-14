@@ -2,7 +2,8 @@
 
 Next.js 16.3.1, `cacheComponents: true`, `partialPrefetching: true`.
 
-This project shows two behaviours that do not agree with the documentation.
+This project shows two behaviours that do not agree with the documentation. It supports
+[vercel/next.js#97386](https://github.com/vercel/next.js/issues/97386).
 
 ## The route
 
